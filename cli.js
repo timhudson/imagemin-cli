@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 'use strict';
+const path = require('path');
 const arrify = require('arrify');
 const meow = require('meow');
 const getStdin = require('get-stdin');
+const globby = require('globby');
 const imagemin = require('imagemin');
 const ora = require('ora');
 const plur = require('plur');
@@ -17,20 +19,26 @@ const cli = meow(`
 	Options
 	  -p, --plugin   Override the default plugins
 	  -o, --out-dir  Output directory
+		-w, --write    Edit files in-place. (Beware!)
 
 	Examples
 	  $ imagemin images/* --out-dir=build
 	  $ imagemin foo.png > foo-optimized.png
 	  $ cat foo.png | imagemin > foo-optimized.png
 	  $ imagemin --plugin=pngquant foo.png > foo-optimized.png
+		$ imagemin **/*.{jpg,png} --write
 `, {
 	string: [
 		'plugin',
 		'out-dir'
 	],
+	boolean: [
+		'write'
+	],
 	alias: {
 		p: 'plugin',
-		o: 'out-dir'
+		o: 'out-dir',
+		w: 'write'
 	}
 });
 
@@ -68,11 +76,34 @@ const run = (input, opts) => {
 		return;
 	}
 
-	if (opts.outDir) {
+	if (opts.outDir || opts.write) {
 		spinner.start();
 	}
 
-	imagemin(input, opts.outDir, {use})
+	const runAll = !opts.write ? runSingle(input, opts) : (
+		globby(input, {nodir: true})
+			.then(paths => {
+				return Promise.all(paths.map(x => runSingle([x], { outDir: path.dirname(x) }, use)));
+			})
+	).then(results => Array.isArray(results) ? results : [results]);
+
+	runAll
+		.then((results) => {
+			spinner.stop();
+			console.log(`${results.length} ${plur('image', results.length)} minified`);
+		})
+		.catch(err => {
+			spinner.stop();
+			throw err;
+		});
+
+	if (opts.write) {
+	} else {
+		runSingle(input, opts);
+	}
+
+	function runSingle(input, opts) {
+		return imagemin(input, opts.outDir, {use})
 		.then(files => {
 			if (!opts.outDir && files.length === 0) {
 				return;
@@ -87,15 +118,8 @@ const run = (input, opts) => {
 				process.stdout.write(files[0].data);
 				return;
 			}
-
-			spinner.stop();
-
-			console.log(`${files.length} ${plur('image', files.length)} minified`);
 		})
-		.catch(err => {
-			spinner.stop();
-			throw err;
-		});
+	}
 };
 
 if (!cli.input.length && process.stdin.isTTY) {
